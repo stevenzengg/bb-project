@@ -10,130 +10,100 @@ export class PartsService {
     ];
 
     async getAggregatedPart(partNumber: string) {
-        // Step 1: Fetch data from all suppliers
-        const supplierData = await Promise.all(
-            this.suppliers.map(async (supplier) => {
-                try {
-                    const response = await axios.get(supplier.url);
-                    return { supplier: supplier.name, data: response.data };
-                } catch (error) {
-                    console.error(`Error fetching data from ${supplier.name}:`, error.message);
-                    return null; // If API fails, we skip it
-                }
-            }),
-        );
-
-        // Step 2: Remove failed supplier responses
-        const successfulSuppliers = supplierData.filter((item) => item?.data);
-
-        // Step 3: If ALL suppliers failed, return an error
-        if (successfulSuppliers.length === 0) {
-            throw new HttpException(
-                "All supplier APIs failed. Please try again later.",
-                HttpStatus.SERVICE_UNAVAILABLE
-            );
+        const supplierData = await this.fetchSupplierData();
+        if (supplierData.length === 0) {
+            throw new HttpException("All supplier APIs failed. Please try again later.", HttpStatus.SERVICE_UNAVAILABLE);
         }
 
-        // Step 4: Extract parts and inject origin
-        const parts = successfulSuppliers.flatMap((supplier) => {
-            if (!supplier?.supplier) return [];
-            console.log("Checking part supplier:", supplier);
-            const parser = SupplierParserRegistry.getParser(supplier.supplier);
-            if (!parser) {
-                console.warn(`No parser found for supplier: ${supplier.supplier}`);
-                return [];
-            }
-            return parser.extractParts(supplier.data, partNumber).map((part) => ({
-                ...part,
-                origin: supplier.supplier, // 🔹 Track where the data came from
-            }));
-        });
-
-        // Step 5: If no matching data found, return a 404
+        const parts = this.extractParts(supplierData, partNumber);
         if (parts.length === 0) {
             throw new HttpException(`Part ${partNumber} not found from any suppliers`, HttpStatus.NOT_FOUND);
         }
 
-        // Step 6: Aggregate data and return response
         return this.aggregateData(parts, partNumber);
     }
 
-    private aggregateData(parts: any[], partNumber: string) {
-        const totalStock = parts.reduce((sum, part) => sum + (Number(part.fohQuantity) || Number(part.availableToSell) || 0), 0);
-        const manufacturerLeadTime = Math.min(...parts.map(part => this.convertLeadTime(part) ?? 9999));
-        const specifications = this.groupSpecificationsBySupplier(parts);
-        const packaging = this.extractPackagingFromParts(parts);
+    private async fetchSupplierData() {
+        const responses = await Promise.allSettled(
+            this.suppliers.map(supplier =>
+                axios.get(supplier.url).then(response => ({ supplier: supplier.name, data: response.data }))
+            )
+        );
 
+        return responses
+            .filter(res => res.status === "fulfilled" && res.value?.data)
+            .map(res => (res as PromiseFulfilledResult<any>).value);
+    }
+
+    private extractParts(supplierData: any[], partNumber: string) {
+        return supplierData.flatMap(({ supplier, data }) => {
+            const parser = this.getParserOrWarn(supplier);
+            return parser ? parser.extractParts(data, partNumber).map(part => ({ ...part, origin: supplier })) : [];
+        });
+    }
+
+    private aggregateData(parts: any[], partNumber: string) {
+        // Extract packaging data once
+        const packaging = this.extractPackagingFromParts(parts);
+    
+        // Get minimum lead time from extracted packaging data
+        const manufacturerLeadTime = this.getMinLeadTimeFromPackaging(packaging);
+    
         return {
-            name: partNumber,            
+            name: partNumber,
             description: parts.find(part => part.description)?.description || "No description available",
-            totalStock,
-            manufacturerLeadTime: manufacturerLeadTime === 9999 ? "N/A" : `${manufacturerLeadTime} days`,
+            totalStock: parts.reduce((sum, part) => sum + (Number(part.fohQuantity) || Number(part.availableToSell) || 0), 0),
+            manufacturerLeadTime,
             manufacturerName: parts.find(part => part.manufacturer)?.manufacturer || "Unknown",
             productDoc: parts.find(part => part.datasheetURL)?.datasheetURL || null,
             productUrl: parts.find(part => part.buyUrl)?.buyUrl || null,
             productImageUrl: parts.find(part => part.imageURL)?.imageURL || null,
-            sourceParts: [...new Set(parts.map(part => part.origin).filter(Boolean))], // Remove nulls
-            specifications,
-            packaging,
+            sourceParts: [...new Set(parts.map(part => part.origin).filter(Boolean))],
+            specifications: this.groupSpecificationsBySupplier(parts),
+            packaging, // Already extracted earlier
         };
     }
-
+    
+    // Extract minimum lead time from packaging
+    private getMinLeadTimeFromPackaging(packaging: any[]): string {
+        const leadTimes = packaging
+            .map(p => parseInt(p.manufacturerLeadTime))
+            .filter(time => !isNaN(time));
+    
+        return leadTimes.length > 0 ? `${Math.min(...leadTimes)}` : "N/A";
+    }
+    
     private convertLeadTime(part: any): number | null {
-        if (!part.leadTime) return null;
         if (typeof part.leadTime === 'string') {
             const match = part.leadTime.match(/(\d+)\s*weeks?/i);
-            return match ? parseInt(match[1]) * 7 : null; // Convert weeks to days
+            return match ? parseInt(match[1]) * 7 : null;
         }
-        return typeof part.leadTime === 'number' ? part.leadTime * 7 : null; // Convert weeks to days
+        return typeof part.leadTime === 'number' ? part.leadTime * 7 : null;
     }
 
-    private groupSpecificationsBySupplier(parts: any[]): any {
+    private groupSpecificationsBySupplier(parts: any[]) {
         return parts.reduce((acc, part) => {
-            if (!part.origin) {
-                console.warn("⚠️ Missing origin for part:", part);
-                return acc;
-            }
-    
-            const parser = SupplierParserRegistry.getParser(part.origin);
-            if (!parser) {
-                console.warn(`⚠️ No parser found for origin: ${part.origin}`);
-                return acc;
-            }
-    
-            console.log("✅ Calling extractSpecifications() for origin:", part.origin);
+            const parser = this.getParserOrWarn(part.origin);
+            if (!parser) return acc;
+
             const specData = parser.extractSpecifications(part);
-    
-            // Ensure correct structure (only add if valid)
-            if (specData && specData.supplier && Array.isArray(specData.specifications)) {
-                if (!acc[specData.supplier]) {
-                    acc[specData.supplier] = [];
-                }
+            if (specData?.supplier && Array.isArray(specData.specifications)) {
                 acc[specData.supplier] = specData.specifications;
-            } else {
-                console.warn(`⚠️ extractSpecifications did not return a valid object for origin: ${part.origin}`);
             }
-    
             return acc;
         }, {});
     }
-    
-    
 
     private extractPackagingFromParts(parts: any[]) {
-        return parts.flatMap((part) => {
-            if (!part.origin) {
-                console.warn("⚠️ Missing origin for part:", part);
-                return [];
-            }
-
-            const parser = SupplierParserRegistry.getParser(part.origin);
-            if (!parser) {
-                console.warn(`⚠️ No parser found for origin: ${part.origin}`);
-                return [];
-            }
-
-            return parser.extractPackaging(part);
+        return parts.flatMap(part => {
+            const parser = this.getParserOrWarn(part.origin);
+            return parser ? parser.extractPackaging(part) : [];
         });
+    }
+
+    private getParserOrWarn(supplier: string) {
+        const parser = SupplierParserRegistry.getParser(supplier);
+        if (!parser) console.warn(`⚠️ No parser found for supplier: ${supplier}`);
+        return parser;
     }
 }
