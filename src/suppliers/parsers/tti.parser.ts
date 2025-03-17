@@ -33,6 +33,7 @@ export class TTIParser implements SupplierParser {
     }];
   }
 
+  // Unchecked, needs to be updated
   extractSpecifications(part: any): any {
     return {
         supplier: "TTI",

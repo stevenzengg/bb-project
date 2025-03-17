@@ -34,6 +34,7 @@ export class ArrowParser implements SupplierParser {
         }];
     }
 
+    // Unchecked, needs to be updated
     extractSpecifications(part: any): any {
         return {
             supplier: "Arrow",
