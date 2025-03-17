@@ -1,6 +1,10 @@
 import { SupplierParser } from "../parser.interface";
+import { SupplierParserRegistry } from "../supplier.registry";
 
 export class ArrowParser implements SupplierParser {
+  constructor() {
+    SupplierParserRegistry.register("Arrow", this);
+}
   extractParts(data: any, partNumber: string): any[] {
     if (!data.pricingResponse) return [];
     return data.pricingResponse.filter((part: any) => part.partNumber === partNumber);
@@ -43,5 +47,6 @@ export class ArrowParser implements SupplierParser {
             ]
         };
     }
-
 }
+new ArrowParser(); // 🔹 Ensures the parser registers itself on import
+

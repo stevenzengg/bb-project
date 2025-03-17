@@ -1,6 +1,6 @@
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import axios from 'axios';
-import { SupplierParserFactory } from '../suppliers/factory';
+import { SupplierParserRegistry } from '../suppliers/supplier.registry';
 
 @Injectable()
 export class PartsService {
@@ -37,9 +37,8 @@ export class PartsService {
         // Step 4: Extract parts and inject origin
         const parts = successfulSuppliers.flatMap((supplier) => {
             if (!supplier?.supplier) return [];
-
             console.log("Checking part supplier:", supplier);
-            const parser = SupplierParserFactory.getParser(supplier.supplier);
+            const parser = SupplierParserRegistry.getParser(supplier.supplier);
             if (!parser) {
                 console.warn(`No parser found for supplier: ${supplier.supplier}`);
                 return [];
@@ -96,7 +95,7 @@ export class PartsService {
                 return acc;
             }
     
-            const parser = SupplierParserFactory.getParser(part.origin);
+            const parser = SupplierParserRegistry.getParser(part.origin);
             if (!parser) {
                 console.warn(`⚠️ No parser found for origin: ${part.origin}`);
                 return acc;
@@ -128,7 +127,7 @@ export class PartsService {
                 return [];
             }
 
-            const parser = SupplierParserFactory.getParser(part.origin);
+            const parser = SupplierParserRegistry.getParser(part.origin);
             if (!parser) {
                 console.warn(`⚠️ No parser found for origin: ${part.origin}`);
                 return [];

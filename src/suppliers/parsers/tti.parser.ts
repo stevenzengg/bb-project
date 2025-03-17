@@ -1,6 +1,10 @@
 import { SupplierParser } from "../parser.interface";
+import { SupplierParserRegistry } from "../supplier.registry";
 
 export class TTIParser implements SupplierParser {
+  constructor() {
+    SupplierParserRegistry.register("TTI", this);
+  }
   extractParts(data: any, partNumber: string): any[] {
     if (!data.parts) return [];
     return data.parts.filter((part: any) => part.manufacturerPartNumber === partNumber);
@@ -42,5 +46,6 @@ export class TTIParser implements SupplierParser {
         ]
     };
   }
-
 }
+new TTIParser(); // 🔹 Ensures the parser registers itself on import
+
